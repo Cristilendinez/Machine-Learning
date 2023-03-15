@@ -1,0 +1,475 @@
+---
+title: "PEC 3:Determinaci贸n de la localizaci贸n subcelular de prote铆nas"
+author: "Cristina Lendinez Gonzalez"
+date: '`r format(Sys.Date(),"%e de %B, %Y")`'
+output: 
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: yes
+    toc: yes
+    toc_depth: 3
+    number_sections: yes
+  html_document:
+    toc: yes
+    number_sections: yes
+nocite: |
+  @lantz2015machine
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+\pagebreak
+
+
+```{r}
+library(mltools)
+library(data.table)
+library(class)
+library(gmodels)
+library(caret)
+library(lattice)
+library(ggplot2)
+library(knitr)
+library(e1071)
+library(neuralnet)
+library(NeuralNetTools)
+#library(kernalab)
+library(C50)
+library(randomForest)
+library(mltools)
+```
+
+
+# Lectura de los datos, exploraci贸n, transformaci贸n y obtenci贸n de las muestras train y test
+
+Los datos que se van a utilizar en esta PEC vienen adjuntos al enunciado y han sido descargados directamente
+desde la pagina de la UOC en el aula de Machine Learning,
+
+```{r message=FALSE, warning=FALSE, results='asis'}
+
+datos<-read.table("./yeast.data")
+```
+
+Voy a veer que tipo de variables tengo en mi dataset llamado data
+
+```{r}
+str(datos)
+```
+
+```{r}
+colnames(datos)<-c("secuencia","mcg","gvh", "alm","mit","erl","pox","vac","nuc","class")
+```
+
+Hago una tabla de frecuencias para ver la localizacion en la celula.
+
+```{r}
+table(datos$class)
+```
+
+En el enunciado nos piden que englobe en una univa clase Mem los tipos (MEM1, MEM2, MEM3).
+
+```{r}
+datos$class <- as.character(datos$class)
+datos$class[datos$class == "ME1"] <- "MEM"
+datos$class[datos$class == "ME2"] <- "MEM"
+datos$class[datos$class == "ME3"] <- "MEM"
+```
+
+Lo que voy a hacer es crear el dataset con el que voy a trabajar.
+
+```{r}
+data <- subset(datos, subset = class == "CYT" | class == "MEM" | class == "MIT" | class == "NUC")
+```
+
+
+Puedo ver que la primera variable la variable secuencia no me sirve, ya que es una varable explicativa.
+
+```{r}
+data <- data[-1]
+```
+
+Puedo ver que ya me he quedado solo con las variables numericas, las cuales voy a usar para hacer el anaisis. , empezare haciendo un summary del dataframe llamado **dataframe**. y un table para ver como se dividen las varibles class y erc.
+```{r}
+table(data$class)
+```
+
+```{r}
+table(data$erl)
+```
+
+Hago el estadistico b谩sico con la variable summary
+
+```{r}
+summary(data)
+```
+
+Voy a graficar la variable class, asi podre ver como se distribuyen en un grafico de barras los diferentes tipos de clases.
+
+```{r}
+barplot(table(data$class))
+```
+
+voy a comparar los diferentes graficos con todas las variables en graficos de cajas.
+
+```{r}
+par(mfrow=c(3,2))
+boxplot(data$mcg~data$class, xlab="Clase", ylab="MCG")
+boxplot(data$gvh~data$class, xlab="Clase", ylab="GVH")
+boxplot(data$alm~data$class, xlab="Clase", ylab="ALM")
+boxplot(data$mit~data$class, xlab="Clase", ylab="MIT")
+boxplot(data$vac~data$class, xlab="Clase", ylab="VAC")
+boxplot(data$nuc~data$class, xlab="Clase", ylab="NUC")
+```
+
+
+Como puedo ver todos los valores que tengo oscilan entre 0 y 1 y por eso no tenemos que hacer el one-hote encodign o dummy ya que no hay que normalizar los valores.
+
+## Obtenci贸n muestras train y test
+
+Voy a eliminar la variable class, ya que es una variable categorica.
+
+```{r}
+data_2 <- as.data.frame(data[-9])
+```
+
+veo que observciones y variables tengo, mirando las primeras 5 observaciones
+
+```{r}
+head(data_2)
+```
+
+
+Vamos a generar la parte de training y la parte de test, hago una separacion del 67% y del 33%
+
+```{r}
+set.seed(1234)
+train<-sample(1:nrow(data_2),round(2*nrow(data_2)/3))
+out_training<-data_2[train,]
+out_test<-data_2[-train,]
+dim(out_training)
+```
+
+```{r}
+dim(out_test)
+```
+
+```{r}
+#labels
+class_training <- data[train,9]
+class_test <- data[-train,9]
+```
+
+# Elaboraci贸n de los algoritmos
+
+Vamos a analizar la capacidad de predecir los algoritmos que hemos aprendido a lo largo del curso
+
+## Algoritmo K-NN
+
+Vamos a entrenar el algoritmo **KNN** para ver que valores obtengo en estos k(1,3,5,7,11), son los mismos k que usamos en la pec1.
+
+```{r}
+ks<-c(1,3,5,7,11)
+kNN_all<-data.frame(ks,Accuracy=NA, Kappa=NA, AccuracyLower=NA, AccuracyUpper=NA)
+
+j<-0
+for(i in ks){
+j<-j+1
+set.seed(1234)
+prediction<-knn(train=out_training,test=out_test,cl=class_training,k=i)
+conf.mat.kNN<-confusionMatrix(table(prediction,class_test))
+kNN_all[j,2:5]<-round(conf.mat.kNN$overall[1:4],3)
+}
+kable(kNN_all,align=c("l","c","c","c","c"),caption=paste("Algoritmo kNN"))
+```
+
+Puedo ver que obtengo unos valores con los diferentes k(1,3,5,7,11), en el que veo que el que mejor precisi贸n tiene es el k11 con un Accuracy de 0.617 .
+
+Voy a generar la matriz de confusi贸n con el k11, ya que es el que mejor valor predictivo me acaba de dar.
+
+```{r}
+#con la mejor k
+test_predicion<-knn(train=out_training,test=out_test,cl=class_training,k=11)
+confusionMatrix(table(class_test,test_predicion))
+```
+
+## Algoritmo Naive Bayes
+
+Este algoritmo esta basado en el teorema de Bayes.En este algoritmo utilizar茅 los datos originales quese han utilizado en el caso anterior de los **KNN**. No tenemos que transformar las variables.
+Entrenare el modelo con laplace=0 y laplace=1
+
+
+### Entrenamiento del model de Naive Bayes
+```{r}
+set.seed(1234)
+NB_0<-naiveBayes(out_training,class_training,type="raw",laplace=0)
+NB_1<-naiveBayes(out_training,class_training,type="raw",laplace = 1)
+
+```
+
+### Prediciion y evaluacion del modelo Naive Bayes
+
+```{r}
+#predicci贸n y evaluaci贸n del modelo
+predNB_0<-predict(NB_0,out_test,type="class")
+predNB_1<-predict(NB_1,out_test,type="class")
+evalNB_0<-confusionMatrix(table(predNB_0,class_test))
+evalNB_1<-confusionMatrix(table(predNB_1,class_test))
+```
+
+Los datos que obtenemos son estos:
+
+```{r}
+lp<-data.frame(laplace=c(0,1))
+NB_all<-rbind(round(evalNB_0$overall[1:4],3),round(evalNB_1$overall[1:4],3))
+NB_all<-cbind(lp,NB_all)
+kable(NB_all,align=c("l","c","c","c","c"),caption=paste("Algoritmo Naive Bayes"))
+```
+
+##Algoritmo Neural Networks
+
+### Transformar los datos
+
+Como tengo que entrenar el modelo del ANN o Algoritmo Neural Networks, tengo que crear unas nuevas variables para poder ponerle nobre a la variable clase.
+
+```{r}
+data_ANN<-data[,-9]
+data_ANN$CYT<-data$class=="CYT"
+data_ANN$MEM<-data$class=="MEM"
+data_ANN$MIT<-data$class=="MIT"
+data_ANN$NUC<-data$class=="NUC"
+names(data_ANN)
+
+```
+
+Ahora tengo que hacer lo mismo que con los anteriores, tengo que partir **data_ANN** para generar la parte de entrenamiento y la parte de test.
+
+
+```{r}
+ANN_train <- data_ANN[train,]
+ANN_test <- data_ANN[-train,]
+```
+
+
+### Entrenar el modelo data_ANN
+
+Ahora se entrenaran 2 modelos. Uno tendra 3 nodos en la capa oculta y el otro 5.
+
+```{r}
+library(neuralnet)
+xnam<-names(data_ANN[1:8])
+(fmla=as.formula(paste("CYT+MEM+MIT+NUC ~", paste(xnam,collapse="+"))))
+```
+
+```{r}
+set.seed(1234)
+ANN_mod1<-neuralnet(fmla, data=ANN_train,hidden=1)
+# entrenar el modelo con 3 nodos
+ANN_mod3<-neuralnet(fmla, data=ANN_train,hidden=3)
+# entrenar el modelo con 5 nodos
+ANN_mod5<-neuralnet(fmla, data=ANN_train,hidden=5)
+
+```
+
+### Predicci贸n y evaluacion del ANN
+
+Muestro el modelo.
+
+```{r}
+#Evaluaci贸n del modelo con 3 nodos
+ANN3results=compute(ANN_mod3,ANN_test[1:8])$net.result
+maxidx<-function(arr){
+return(which(arr == max(arr)))}
+idx=apply(ANN3results,1,maxidx)
+prediction=factor(idx,levels=1:4, labels= c("CYT","MEM","MIT","NUC"))
+res3<-table(prediction,class_test)
+evalANN3<-confusionMatrix(res3)
+evalANN3
+
+```
+
+Hago la predicci贸n del modelo con 5  nodos.
+
+```{r}
+ANN5results=compute(ANN_mod5,ANN_test[1:8])$net.result
+maxidx<-function(arr){
+return(which(arr == max(arr)))}
+idx=apply(ANN5results,1,maxidx)
+prediction=factor(idx,levels=1:4, labels= c("CYT","MEM","MIT","NUC"))
+res5<-table(prediction,class_test)
+evalANN5<-confusionMatrix(res5)
+evalANN5
+```
+
+Ahora lo que hago es tabular los datos y seguidamente hare el grafico de la red neuronal.
+
+```{r}
+Nodos_ANN<-data.frame(Nodos=c(3,5))
+ANN_All<-rbind(round(evalANN3$overall[1:4],3), round(evalANN5$overall[1:4],3))
+ANN_All<-cbind(Nodos_ANN,ANN_All)
+kable(ANN_All,align=c("l","c","c","c","c"),caption=paste("ANN"))
+```
+
+lo que observo al ver los datos obtenidos en el ANN son mejores los datos obtenidos en el que tiene 5 nodos, que el que tiene 3 nodos.
+
+
+```{r}
+plot(ANN_mod5,rep="best")
+
+```
+
+## Algoritmo SVM
+
+En este apartado no hace falta que tranformemos los datos.
+
+```{r}
+library(kernlab)
+
+```
+
+
+```{r}
+set.seed(1234)
+class_train<-as.factor(data[train,9])
+SVM_vanilladot<-ksvm(class_train ~.,data=out_training,kernel="vanilladot")
+```
+
+```{r}
+set.seed(1234)
+SVM_rbf<-ksvm(class_train ~.,data=out_training,kernel="rbf")
+```
+
+### Prediccion y evaluacion del modelo de SVM
+
+Ahora hago la predicci贸n del modelo SVM
+
+```{r}
+SVM_vanPredicion<-predict(SVM_vanilladot,out_test)
+res_van<-table(SVM_vanPredicion,class_test)
+svm_vanMat<-confusionMatrix(res_van)
+
+```
+
+```{r}
+SVM_rbfPredicion<-predict(SVM_rbf,out_test)
+res_rbf<-table(SVM_rbfPredicion,class_test)
+svm_rbfMat<-confusionMatrix(res_rbf)
+
+```
+
+Saco el resultado de la predicci贸n del modelo.
+
+```{r}
+Modelo<-data.frame(Modelo=c("Lineal","Gaussiano"))
+SVM_All<-rbind(round(svm_vanMat$overall[1:4],3),round(svm_rbfMat$overall[1:4],3))
+SVM_All<-cbind(Modelo,SVM_All)
+kable(SVM_All,align=c("l","c","c","c","c"),caption=paste("Algoritmo SVM"))
+```
+
+Con los resultados que he obtenido puedo decir que tenemos una ligera mejor prediccion con el medelo "Gausiano", que con el modelo "lineal". Ahora lo que tengo que hacer es su matriz de confusion.
+
+```{r}
+svm_rbfMat
+```
+
+## Algoritmo Classification Tree
+
+Voy a preparar el modelo para entrenar el Algoritmo de arbol de decisi贸n, en este modelo tampoco tengo que hacer ninguna transformacion de los datos como ocurrio en la red neuronal.
+
+### Entrenamiento del modelo del 谩rbol de decisi贸n.
+
+En este caso tambien se entrenaran dos modelos. Uno sera C5.0 simple y el otro C5.0 haciendo boosting con
+10 trials.
+
+```{r}
+set.seed(1234)
+CTree_Simple<-C5.0(class_train ~.,data=out_training)
+set.seed(1234)
+CTree_Boost<-C5.0(class_train ~.,data=out_training, trial=10)
+```
+
+### Predicci贸n y evaluaci贸n del modelo
+
+```{r}
+class_test2<-as.factor(data[-train,9])
+predicion_Simple<-predict(CTree_Simple,out_test)
+evalSimple<-confusionMatrix(predicion_Simple,class_test2)
+
+predicion_Boost<-predict(CTree_Boost,out_test)
+evalBoost<-confusionMatrix(predicion_Boost,class_test2)
+```
+
+La tabla con los resultados es la siguiente:
+
+```{r}
+Modelo<-data.frame(Modelo=c("Simple","Boost"))
+CT_All<-rbind(round(evalSimple$overall[1:4],3),round(evalBoost$overall[1:4],3))
+CT_All<-cbind(Modelo,CT_All)
+kable(CT_All,align=c("l","c","c","c","c"),caption=paste("Algoritmo Classification Tree"))
+```
+
+Como puedo ver el modelo "Boost" es ligeramente mejor que el modelo "lineal".
+
+### Algoritmo Random Forest
+
+Vamos a hacer el entrenamiento del **Algoritmo  Random Forest**, com hice anteriormente no es necesario transformar los datos en este modelo.
+
+Voy a entrenar el modelo con dos algoritmos diferentes(uno con arbol 50 y otro con arbol 100)
+
+```{r}
+set.seed(1234)
+datos_tree50<-randomForest(class_train ~., data=out_training,ntree=50)
+set.seed(1234)
+datos_tree100<-randomForest(class_train ~., data=out_training,ntree=100)
+```
+
+### Predicci贸n y evaluaci贸n del modelo
+
+Vamos a realizar la predicii贸n y evaluacion del modelo del **Algortimo Random Forest**
+
+```{r}
+predicion_50<-predict(datos_tree50,out_test)
+evaluacion_50<-confusionMatrix(predicion_50,class_test2)
+predicion_100<-predict(datos_tree100,out_test)
+evaluacion_100<-confusionMatrix(predicion_100,class_test2)
+
+```
+
+Ahora saco los resultados.
+
+```{r}
+Numero_arbol<-data.frame(Modelo=c("50","100"))
+RandomF_All<-rbind(round(evaluacion_50$overall[1:4],3),round(evaluacion_100$overall[1:4],3))
+RandomF_All<-cbind(Numero_arbol,RandomF_All)
+kable(RandomF_All,align=c("l","c","c","c","c"),caption=paste("Algoritmo Random Forest"))
+```
+
+Con los resultados obtenidos, lo que veo es que el modelo de arbol 50 es ligeramente superior al modelo de arbol 100.
+
+# Conclusi贸n y Discusion sobre el rendimiento de los modelos
+
+Es esta PEC se han utilizado 6 metodos que han sido estudiados durante el curso (k-Nearest Neighbour,
+Naive Bayes, Artificial Neural Network, Support Vector Machine, Arbol de Decisi贸n y Random
+Forest.) 
+Subo uno sin la tabla ahora te subo otro, lo siento muchisisimo, me esta adando muchos problemas.
+
+```{r}
+library(kernlab)
+```
+
+
+```{r}
+ALL_row<- data.frame(Algoritmo=c("kNN", "Naive Bayes", "ANN","SVM", "C5.0", "RF"),
+                   parametros=c("k= 11","laplace= 0","Nodos= 5", "Gausiano","trial= 10","Arbol= 100"))
+ALL_sum<-rbind(kNN_all[5,2:5],round(evalNB_0$overall[1:4],3),
+round(evalANN5$overall[1:4],3),round(svm_rbfMat$overall[1:4],3),
+round(evalBoost$overall[1:4],3),round(evaluacion_100$overall[1:4],3))
+ALL_sum<-cbind(ALL_row,ALL_sum)
+kable(ALL_sum,align=c("l","c","c","c","c", "c"),caption=paste("Resultado algoritmos optimizados"))
+```
+```{r}
+#En la tabla puedo ver  que todos los algoritmos sus valores estan entre 0.535 el m醩 bajo (algoritmo de Naive Bayes) #y 0.662 el m醩 alto (random forest), el Random Forest es el que mayor predicci髇 tiene  seguido del modelo SVM que es #el modelo Gaussiano del SVM con un valor de 0.647.**El mejor algoritmo es Random Forest**.
+```
+
+
